@@ -4,10 +4,8 @@ import "./App.css";
 const drawPolygon = (canvas, area, points) => {
   const ctx = canvas.getContext("2d");
 
-  // Draw lines between points
+  // Draw filled and outlined polygon
   if (points.length > 0) {
-    ctx.strokeStyle = "#3498db";
-    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
 
@@ -15,8 +13,15 @@ const drawPolygon = (canvas, area, points) => {
       ctx.lineTo(points[i].x, points[i].y);
     }
 
-    ctx.lineTo(points[0].x, points[0].y);
-
+    ctx.closePath();
+    
+    // Fill the polygon
+    ctx.fillStyle = "rgba(52, 152, 219, 0.3)";
+    ctx.fill();
+    
+    // Stroke the outline
+    ctx.strokeStyle = "#3498db";
+    ctx.lineWidth = 2;
     ctx.stroke();
   }
 
@@ -52,6 +57,9 @@ function App() {
   const [mousePos, setMousePos] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [polygons, setPolygons] = useState([]);
+  const [draggedPoint, setDraggedPoint] = useState(null); // { type: 'current'|'polygon', index: number, polygonIndex?: number }
+  const [hoveredPoint, setHoveredPoint] = useState(null); // { type: 'current'|'polygon', index: number, polygonIndex?: number }
+  const [cursorStyle, setCursorStyle] = useState("crosshair");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -75,7 +83,7 @@ function App() {
     polygons.forEach((polygon) => {
       drawPolygon(canvasRef.current, polygon.area, polygon.points);
     });
-  }, [points, mousePos]);
+  }, [points, mousePos, polygons]);
 
   // Calculate polygon area using Shoelace formula
   const calculateArea = (polygonPoints) => {
@@ -88,6 +96,34 @@ function App() {
       area -= polygonPoints[j].x * polygonPoints[i].y;
     }
     return Math.abs(area / 2);
+  };
+
+  // Check if mouse is over a point
+  const getPointAtPosition = (x, y) => {
+    // Check current points being drawn
+    for (let i = 0; i < points.length; i++) {
+      const distance = Math.sqrt(
+        Math.pow(x - points[i].x, 2) + Math.pow(y - points[i].y, 2)
+      );
+      if (distance <= 10) {
+        return { type: "current", index: i };
+      }
+    }
+
+    // Check completed polygon points
+    for (let polygonIndex = 0; polygonIndex < polygons.length; polygonIndex++) {
+      const polygon = polygons[polygonIndex];
+      for (let i = 0; i < polygon.points.length; i++) {
+        const distance = Math.sqrt(
+          Math.pow(x - polygon.points[i].x, 2) + Math.pow(y - polygon.points[i].y, 2)
+        );
+        if (distance <= 10) {
+          return { type: "polygon", index: i, polygonIndex };
+        }
+      }
+    }
+
+    return null;
   };
 
   const redraw = () => {
@@ -143,17 +179,78 @@ function App() {
   };
 
   const handleMouseMove = (e) => {
-    if (!isDrawing) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Handle dragging
+    if (draggedPoint) {
+      if (draggedPoint.type === "current") {
+        setPoints((prev) => {
+          const newPoints = [...prev];
+          newPoints[draggedPoint.index] = { x, y };
+          return newPoints;
+        });
+      } else if (draggedPoint.type === "polygon") {
+        setPolygons((prev) => {
+          const newPolygons = [...prev];
+          const newPoints = [...newPolygons[draggedPoint.polygonIndex].points];
+          newPoints[draggedPoint.index] = { x, y };
+          newPolygons[draggedPoint.polygonIndex] = {
+            ...newPolygons[draggedPoint.polygonIndex],
+            points: newPoints,
+            area: calculateArea(newPoints), // Recalculate area
+          };
+          return newPolygons;
+        });
+      }
+      return;
+    }
+
+    // Handle preview line when drawing
+    if (isDrawing) {
+      setMousePos({ x, y });
+    }
+
+    // Check for hover over points
+    const pointAtPosition = getPointAtPosition(x, y);
+    if (pointAtPosition) {
+      setHoveredPoint(pointAtPosition);
+      setCursorStyle("pointer");
+    } else {
+      setHoveredPoint(null);
+      setCursorStyle("crosshair");
+    }
+  };
+
+  const handleMouseDown = (e) => {
+    // Only handle left mouse button for dragging
+    if (e.button !== 0) return;
 
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    setMousePos({ x, y });
+    const pointAtPosition = getPointAtPosition(x, y);
+    if (pointAtPosition) {
+      e.preventDefault();
+      setDraggedPoint(pointAtPosition);
+      setCursorStyle("grabbing");
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (draggedPoint) {
+      setDraggedPoint(null);
+      setCursorStyle(hoveredPoint ? "pointer" : "crosshair");
+    }
   };
 
   const handleClick = (e) => {
     if (points.length === 0) return;
+    
+    // Don't close polygon if we just finished dragging
+    if (draggedPoint) return;
 
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -206,10 +303,12 @@ function App() {
       ref={canvasRef}
       onContextMenu={handleContextMenu}
       onMouseMove={handleMouseMove}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
       onClick={handleClick}
       style={{
         display: "block",
-        cursor: "crosshair",
+        cursor: cursorStyle,
         margin: 0,
         padding: 0,
       }}
